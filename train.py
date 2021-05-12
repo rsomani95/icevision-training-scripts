@@ -96,7 +96,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
                 else:
                     pg["lr"] = lr_scale * self.LRs[pg["name"]]
 
-        # update params
+        # update params, EMA
         optimizer.step(closure=optimizer_closure)
         self.model_ema.update(self.model)
 
@@ -134,6 +134,10 @@ valid_records, _ = valid_parser.parse(
     cache_filepath=Path.cwd() / "cache" / "CACHE--COCO-Instances-VAL.pkl",
 )
 
+train_ds = Dataset(train_records, train_tfms)
+valid_ds = Dataset(valid_records, valid_tfms)
+# valid_ds = Dataset(valid_records, train_tfms)
+
 # ============================================= #
 
 
@@ -144,7 +148,6 @@ BATCH_SIZE = 16
 
 train_tfms = tfms.A.Adapter(
     [
-        # *tfms.A.aug_tfms(size=img_size, pad=None),
         tfms.A.HorizontalFlip(p=0.15),
         tfms.A.VerticalFlip(p=0.15),
         tfms.A.ShiftScaleRotate(rotate_limit=25, p=0.15),
@@ -171,9 +174,9 @@ valid_tfms = tfms.A.Adapter(
 
 # =================== DATALOADER ==================== #
 
-train_dl = models.mmdet.retinanet.train_dl(
-    train_ds, batch_size=BATCH_SIZE, num_workers=8, shuffle=True, pin_memory=True
-)
+# train_dl = models.mmdet.retinanet.train_dl(
+#     train_ds, batch_size=BATCH_SIZE, num_workers=8, shuffle=True, pin_memory=True
+# )
 valid_dl = models.mmdet.retinanet.valid_dl(
     valid_ds, batch_size=BATCH_SIZE * 2, num_workers=8, shuffle=False, pin_memory=True
 )
@@ -191,14 +194,18 @@ trainer = pl.Trainer(
     benchmark=True,
     precision=16,
     accelerator="ddp",  # turn multi-gpu acceleration
-    logger=pl.loggers.TensorBoardLogger(
-        name="coco-instances", save_dir="lightning_logs/"
-    ),
-    callbacks=[pl.callbacks.LearningRateMonitor(logging_interval="step")],
+    logger=[
+        pl.loggers.TensorBoardLogger(name="coco-mnv3", save_dir="lightning_logs/"),
+        pl.loggers.wandb.WandbLogger(project="coco-mnv3"),
+    ],
+    callbacks=[
+        pl.callbacks.LearningRateMonitor(logging_interval="step"),
+        pl.callbacks.ModelCheckpoint(save_top_k=-1),
+    ],
     weights_summary="full",
     overfit_batches=20 if DEBUG else 0.0,
 )
 trainer.fit(pl_model, train_dl, valid_dl)
-
+trainer.save_checkpoint("end.ckpt")
 
 # =================================================== #
