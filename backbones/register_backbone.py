@@ -15,7 +15,7 @@ from mmdet.models import build_detector
 from tqdm import tqdm
 
 # timm.list_models(pretrained=True, filter="mobile*")
-timm.create_model("mobilenetv3_large_100_aa", pretrained=True, features_only=True)
+# timm.create_model("mobilenetv3_large_100_aa", pretrained=True, features_only=True)
 
 
 def model_dispatcher(model_name) -> type:
@@ -38,7 +38,7 @@ def model_dispatcher(model_name) -> type:
         def __init__(
             self,
             model_name: str = model_name,
-            pretrained: bool = False,
+            pretrained: bool = True,
             checkpoint_path="",
             scriptable: bool = None,
             exportable: bool = None,

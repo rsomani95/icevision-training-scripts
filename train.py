@@ -13,12 +13,15 @@ from pprint import pprint
 
 TRAIN_NUM_EPOCHS = 24
 BATCH_SIZE = 18
-DEBUG = True
+HEIGHT, WIDTH = 640, 640
+DEBUG = False
 
 # ========================================= #
 
 
 # ============== BUILD MODEL ================ #
+
+class_map = icedata.coco.class_map()
 
 model_name = "mobilenetv3_large_100_aa"
 base_config_path = mmdet_configs_path / "retinanet"
@@ -31,9 +34,10 @@ cfg.model.backbone = dict(
     out_indices=(0, 1, 2, 3, 4),
 )
 cfg.model.neck.in_channels = [16, 24, 40, 112, 960]
+cfg.model.bbox_head.num_classes = len(class_map) - 1
 
 model = build_detector(cfg.model)
-print(model)
+# print(model)
 
 # optimizer = torch.optim.SGD(
 #     model_splitter(model), lr=0.01, momentum=0.9, weight_decay=0.0001
@@ -48,9 +52,8 @@ print(model)
 
 class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
     def __init__(self, model: nn.Module, metrics: List[Metric] = None):
-        super().__init__(metrics=metrics)
-        self.model = model
-        self.model_ema = ModelEmaV2(self.model, decay=0.9999, device="cpu")
+        super().__init__(model=model, metrics=metrics)
+        # self.model_ema = ModelEmaV2(self.model, decay=0.9999) #, device="cpu")
 
     def configure_optimizers(self):
         self.LRs = dict(
@@ -76,7 +79,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
             weight_decay=0.0001,
         )
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[16, 22])
-        return [optimizer, scheduler]
+        return [optimizer], [scheduler]
 
     def optimizer_step(
         # fmt: off
@@ -98,7 +101,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
 
         # update params, EMA
         optimizer.step(closure=optimizer_closure)
-        self.model_ema.update(self.model)
+        # self.model_ema.update(self.model)
 
 
 pl_model = MobileNetV3Adapter(
@@ -134,17 +137,10 @@ valid_records, _ = valid_parser.parse(
     cache_filepath=Path.cwd() / "cache" / "CACHE--COCO-Instances-VAL.pkl",
 )
 
-train_ds = Dataset(train_records, train_tfms)
-valid_ds = Dataset(valid_records, valid_tfms)
-# valid_ds = Dataset(valid_records, train_tfms)
-
 # ============================================= #
 
 
 # ============== BUILD AUGMENTATIONS ================ #
-
-HEIGHT, WIDTH = 640, 640
-BATCH_SIZE = 16
 
 train_tfms = tfms.A.Adapter(
     [
@@ -169,14 +165,18 @@ valid_tfms = tfms.A.Adapter(
     ]
 )
 
+train_ds = Dataset(train_records, train_tfms)
+valid_ds = Dataset(valid_records, valid_tfms)
+# valid_ds = Dataset(valid_records, train_tfms)
+
 # =================================================== #
 
 
 # =================== DATALOADER ==================== #
 
-# train_dl = models.mmdet.retinanet.train_dl(
-#     train_ds, batch_size=BATCH_SIZE, num_workers=8, shuffle=True, pin_memory=True
-# )
+train_dl = models.mmdet.retinanet.train_dl(
+    train_ds, batch_size=BATCH_SIZE, num_workers=8, shuffle=True, pin_memory=True
+)
 valid_dl = models.mmdet.retinanet.valid_dl(
     valid_ds, batch_size=BATCH_SIZE * 2, num_workers=8, shuffle=False, pin_memory=True
 )
@@ -186,11 +186,10 @@ valid_dl = models.mmdet.retinanet.valid_dl(
 
 # ============== DATALOADER, METRICS ================ #
 
-
-tb_logger = pl_loggers.TensorBoardLogger(model_save_path, name=model_filename)
 trainer = pl.Trainer(
     max_epochs=TRAIN_NUM_EPOCHS,
     gpus=-1,
+    # gpus=[0],
     benchmark=True,
     precision=16,
     accelerator="ddp",  # turn multi-gpu acceleration
@@ -202,8 +201,8 @@ trainer = pl.Trainer(
         pl.callbacks.LearningRateMonitor(logging_interval="step"),
         pl.callbacks.ModelCheckpoint(save_top_k=-1),
     ],
-    weights_summary="full",
-    overfit_batches=20 if DEBUG else 0.0,
+    # weights_summary="full",
+    # overfit_batches=20 if DEBUG else 0.0,
 )
 trainer.fit(pl_model, train_dl, valid_dl)
 trainer.save_checkpoint("end.ckpt")
