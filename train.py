@@ -1,5 +1,6 @@
 import pytorch_lightning as pl
 
+from icevision.parsers.coco_parser import *
 from timm.utils.model_ema import ModelEmaV2
 from backbones.mobilenetv3 import model_splitter
 from pytorch_lightning import loggers as pl_loggers
@@ -125,13 +126,13 @@ valid_data_dir = Path("/home/synopsis/datasets/coco/val2017/")
 
 class_map = icedata.coco.class_map()
 
-train_parser = icedata.coco.parser(train_annotations_path, train_data_dir)
+train_parser = COCOBBoxParser(train_annotations_path, train_data_dir)
 train_records, _ = train_parser.parse(
     data_splitter=RandomSplitter([1.0, 0.0]),
     cache_filepath=Path.cwd() / "cache" / "CACHE--COCO-Instances-TRAIN.pkl",
 )
 
-valid_parser = icedata.coco.parser(valid_annotations_path, valid_data_dir)
+valid_parser = COCOBBoxParser(valid_annotations_path, valid_data_dir)
 valid_records, _ = valid_parser.parse(
     data_splitter=RandomSplitter([1.0, 0.0]),
     cache_filepath=Path.cwd() / "cache" / "CACHE--COCO-Instances-VAL.pkl",
