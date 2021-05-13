@@ -1,21 +1,62 @@
 import pytorch_lightning as pl
 
-from icevision.parsers.coco_parser import *
-from timm.utils.model_ema import ModelEmaV2
-from backbones.mobilenetv3 import model_splitter
-from pytorch_lightning import loggers as pl_loggers
-from icevision.all import *
-from icevision.models.mmdet.utils import *
-from mmdet.models import build_detector
-from mmcv import Config
+# Python imports
 from pprint import pprint
+from enum import Enum
+
+# Self written imports
+from utils.logging import *
+from backbones.mobilenetv3 import model_splitter
+
+# Icevision, mmdet & co.
+from icevision.all import *
+from icevision.parsers.coco_parser import *
+from icevision.models.mmdet.utils import *
+from mmcv import Config
+from mmdet.models import build_detector
+
+# Other
+# Some !#@$ lightning requirement will not let you use ModelEmaV2
+# inside the lightning module if it's stored on GPU because it's
+# not actually being used in the backward pass.....
+# Storing on "cpu" gives an error...
+from timm.utils.model_ema import ModelEmaV2
+from pytorch_lightning import loggers as pl_loggers
 
 # ============== CONSTANTS ================ #
 
-TRAIN_NUM_EPOCHS = 24
 BATCH_SIZE = 18
 HEIGHT, WIDTH = 640, 640
-DEBUG = False
+DEBUG = False  # Redundant..
+SCHEDULE = "1x"
+LR_TYPE = "constant"
+
+assert LR_TYPE in ["constant", "differential"]
+assert SCHEDULE in ["1x", "2x"]
+
+if LR_TYPE == "constant":
+    LEARNING_RATES = dict(
+        stem=1e-2,
+        blocks=1e-2,
+        neck=1e-2,
+        bbox_head=1e-2,
+        classifier_heads=None,
+    )
+elif LR_TYPE == "differential":
+    LEARNING_RATES = dict(
+        stem=1e-6,
+        blocks=[1e-5, 1e-4, 1e-4, 1e-3, 1e-3, 1e-3, 1e-3],
+        neck=1e-2,
+        bbox_head=1e-2,
+        classifier_heads=None,
+    )
+
+if SCHEDULE == "1x":
+    TRAIN_NUM_EPOCHS = 12
+    LR_STEP_MILESTONES = [8, 11]
+elif SCHEDULE == "2x":
+    TRAIN_NUM_EPOCHS = 24
+    LR_STEP_MILESTONES = [16, 22]
 
 # ========================================= #
 
@@ -40,11 +81,6 @@ cfg.model.bbox_head.num_classes = len(class_map) - 1
 model = build_detector(cfg.model)
 # print(model)
 
-# optimizer = torch.optim.SGD(
-#     model_splitter(model), lr=0.01, momentum=0.9, weight_decay=0.0001
-# )
-# print(len(optimizer.param_groups))
-
 # ============================================ #
 
 
@@ -57,13 +93,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
         # self.model_ema = ModelEmaV2(self.model, decay=0.9999) #, device="cpu")
 
     def configure_optimizers(self):
-        self.LRs = dict(
-            stem=1e-6,
-            blocks=[1e-5, 1e-4, 1e-4, 1e-3, 1e-3, 1e-3, 1e-3],
-            neck=1e-2,
-            bbox_head=1e-2,
-            classifier_heads=None,
-        )
+        self.LRs = LEARNING_RATES
         assert isinstance(self.LRs["blocks"], list)  # just do it.
 
         optimizer = torch.optim.SGD(
@@ -79,7 +109,9 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
             momentum=0.9,
             weight_decay=0.0001,
         )
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[16, 22])
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer, milestones=LR_STEP_MILESTONES
+        )
         return [optimizer], [scheduler]
 
     def optimizer_step(
@@ -207,5 +239,24 @@ trainer = pl.Trainer(
 )
 trainer.fit(pl_model, train_dl, valid_dl)
 trainer.save_checkpoint("end.ckpt")
+
+# =================================================== #
+
+
+# ================= CONFIG LOGGING ================== #
+
+
+wandb.config.update(
+    dict(
+        model="mobilenetv3-aa",
+        num_epochs=TRAIN_NUM_EPOCHS,
+        lr_policy=LR_TYPE,
+        schedule=SCHEDULE,
+        batch_size=BATCH_SIZE,
+        image_size=f"{HEIGHT}x{WIDTH}",
+        optimizer="SGD",
+        train_tfms=[extract_tfm_string(t) for t in train_tfms.tfms_list],
+    )
+)
 
 # =================================================== #
