@@ -37,7 +37,7 @@ assert SCHEDULE in ["1x", "2x"]
 if LR_TYPE == "constant":
     LEARNING_RATES = dict(
         stem=1e-2,
-        blocks=1e-2,
+        blocks=[1e-2] * 7,
         neck=1e-2,
         bbox_head=1e-2,
         classifier_heads=None,
