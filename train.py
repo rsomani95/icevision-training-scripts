@@ -30,7 +30,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 
 BATCH_SIZE = 18
 HEIGHT, WIDTH = 640, 640
-DEBUG = False  # Redundant..
+DEBUG = True
 SCHEDULE = "1x"
 LR_TYPE = "constant"
 
@@ -40,8 +40,8 @@ assert SCHEDULE in ["1x", "2x"]
 DEFAULT_TOTAL_SAMPLES = 16  # 8 GPUs * 2 samples per GPU
 DEFAULT_LR = 0.02
 
-NUM_GPUS = 3
-SAMPLES_PER_GPU = 32  #  defined in "../_base_/datasets/coco_detection_custom.py",
+NUM_GPUS = 1
+SAMPLES_PER_GPU = BATCH_SIZE
 TOTAL_SAMPLES = SAMPLES_PER_GPU * NUM_GPUS
 LR_SCALER = TOTAL_SAMPLES / DEFAULT_TOTAL_SAMPLES
 LR = LR_SCALER * DEFAULT_LR  # == 0.0675 @18, 0.06 @16, 0.12 @ 32, and so on...
@@ -201,11 +201,29 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
                         pg["lr"] = lr_scale * self.LRs[pg["name"]]
             else:
                 for pg in optimizer.param_groups:
-                    pg["lr"] = lr_scale * self.learning_rate
+                    pg["lr"] = lr_scale * LR
 
         # update params, EMA
         optimizer.step(closure=optimizer_closure)
         # self.model_ema.update(self.model)
+
+    def training_step(self, batch, batch_idx):
+        data, samples = batch
+
+        outputs = self.model.train_step(data=data, optimizer=None)
+        for k, v in outputs["log_vars"].items():
+            self.log(f"train/{k}", v)
+
+        if DEBUG:
+            print(f'{"*"*30} Training Step {"*"*30}')
+            print(f"Finding unused parameters...")
+
+            for name, param in self.model.named_parameters():
+                if param.grad is None:
+                    print(name)
+            print(f'{"*"*80}')
+
+        return outputs["loss"]
 
 
 pl_model = MobileNetV3Adapter(
@@ -292,11 +310,11 @@ valid_dl = models.mmdet.retinanet.valid_dl(
 
 trainer = pl.Trainer(
     max_epochs=TRAIN_NUM_EPOCHS,
-    gpus=-1,
+    gpus=-1 if NUM_GPUS > 1 else 0,
     # gpus=[0],
     benchmark=True,
     precision=16,
-    accelerator="ddp",  # turn multi-gpu acceleration
+    accelerator="ddp" if NUM_GPUS > 1 else None,
     logger=[
         pl.loggers.TensorBoardLogger(name="coco-mnv3", save_dir="lightning_logs/"),
         pl.loggers.wandb.WandbLogger(project="coco-mnv3"),
