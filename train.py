@@ -22,6 +22,7 @@ from mmdet.models import build_detector
 # Storing on "cpu" gives an error...
 from timm.utils.model_ema import ModelEmaV2
 from pytorch_lightning import loggers as pl_loggers
+from torch.nn.modules.batchnorm import _BatchNorm
 
 # ============== CONSTANTS ================ #
 
@@ -34,15 +35,25 @@ LR_TYPE = "constant"
 assert LR_TYPE in ["constant", "differential"]
 assert SCHEDULE in ["1x", "2x"]
 
+DEFAULT_TOTAL_SAMPLES = 16  # 8 GPUs * 2 samples per GPU
+DEFAULT_LR = 0.02
+
+NUM_GPUS = 3
+SAMPLES_PER_GPU = 32  #  defined in "../_base_/datasets/coco_detection_custom.py",
+TOTAL_SAMPLES = SAMPLES_PER_GPU * NUM_GPUS
+LR_SCALER = TOTAL_SAMPLES / DEFAULT_TOTAL_SAMPLES
+LR = LR_SCALER * DEFAULT_LR  # == 0.0675 @18, 0.06 @16, 0.12 @ 32, and so on...
+
 if LR_TYPE == "constant":
     LEARNING_RATES = dict(
-        stem=1e-2,
-        blocks=[1e-2] * 7,
-        neck=1e-2,
-        bbox_head=1e-2,
+        stem=LR,
+        blocks=[LR] * 7,
+        neck=LR,
+        bbox_head=LR,
         classifier_heads=None,
     )
 elif LR_TYPE == "differential":
+    raise RuntimeError(f"Don't use differential LRs when training from scratch")
     LEARNING_RATES = dict(
         stem=1e-6,
         blocks=[1e-5, 1e-4, 1e-4, 1e-3, 1e-3, 1e-3, 1e-3],
@@ -73,9 +84,9 @@ cfg = Config.fromfile(config_path)
 cfg.model.backbone = dict(
     type=f"TIMM_{model_name}",
     pretrained=True,
-    out_indices=(0, 1, 2, 3, 4),
+    out_indices=(1, 2, 3, 4),
 )
-cfg.model.neck.in_channels = [16, 24, 40, 112, 960]
+cfg.model.neck.in_channels = [24, 40, 112, 960]
 cfg.model.bbox_head.num_classes = len(class_map) - 1
 
 model = build_detector(cfg.model)
@@ -88,9 +99,46 @@ model = build_detector(cfg.model)
 
 
 class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
-    def __init__(self, model: nn.Module, metrics: List[Metric] = None):
+    def __init__(
+        self,
+        model: nn.Module,
+        metrics: List[Metric] = None,
+        norm_eval=True,
+        freeze_blocks=1,
+    ):
+        """
+        `norm_eval`: Sets BatchNorm layers to eval mode
+        `freeze_blocks`: No. of backbone blocks to be frozen. NOTE that the
+                         conv stem is ALWAYS frozen
+        """
         super().__init__(model=model, metrics=metrics)
+        self.norm_eval = norm_eval
         # self.model_ema = ModelEmaV2(self.model, decay=0.9999) #, device="cpu")
+
+    def _freeze_stages(self):
+        # ACRONYMS: m => model; l => layer
+        m = self.model
+        for l in [m.conv1, m.bn1, m.act1]:
+            l.eval()
+            for param in l.parameters():
+                param.requires_grad = False
+
+        for i in range(self.frozen_stages):
+            l = m.blocks[i]
+            l.eval()
+            for param in l.parameters():
+                param.requires_grad = False
+
+    def train(self, mode=True):
+        """Convert the model into training mode while keep normalization layer
+        freezed."""
+        super(MobileNetV3Adapter, self).train(mode)
+        self._freeze_stages()
+        if mode and self.norm_eval:
+            for layer in self.model.modules():
+                # trick: eval have effect on BatchNorm only
+                if isinstance(m, _BatchNorm):
+                    layer.eval()
 
     def configure_optimizers(self):
         self.LRs = LEARNING_RATES
@@ -126,6 +174,8 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
 
             # ensure we respect individual param groups' LR by scaling
             # each group's lr with the initial lr
+            # TODO: This can be easily refactored into an `lr_scheduler`.
+            # You don't need to track each group manually that way
             for pg in optimizer.param_groups:
                 if "block_idx" in pg.keys():
                     pg["lr"] = lr_scale * self.LRs["blocks"][pg["block_idx"]]
