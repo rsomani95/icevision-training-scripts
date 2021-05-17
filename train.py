@@ -14,7 +14,7 @@ from backbones.mobilenetv3 import model_splitter
 from icevision.all import *
 from icevision.parsers.coco_parser import *
 from icevision.models.mmdet.utils import *
-from mmcv import Config
+from mmcv import Config, ConfigDict
 from mmdet.models import build_detector
 
 # Other
@@ -83,10 +83,13 @@ base_config_path = mmdet_configs_path / "retinanet"
 config_path = base_config_path / "retinanet_r50_fpn_1x_coco.py"
 cfg = Config.fromfile(config_path)
 
-cfg.model.backbone = dict(
-    type=f"TIMM_{model_name}",
-    pretrained=True,
-    out_indices=(1, 2, 3, 4),
+## mmdet >= 2.12 requires `ConfigDict`, not just `dict`
+cfg.model.backbone = ConfigDict(
+    dict(
+        type=f"TIMM_{model_name}",
+        pretrained=True,
+        out_indices=(1, 2, 3, 4),
+    )
 )
 cfg.model.neck.in_channels = [24, 40, 112, 960]
 cfg.model.bbox_head.num_classes = len(class_map) - 1
