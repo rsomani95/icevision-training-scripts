@@ -317,7 +317,7 @@ valid_dl = models.mmdet.retinanet.valid_dl(
 
 trainer = pl.Trainer(
     max_epochs=TRAIN_NUM_EPOCHS,
-    gpus=-1 if NUM_GPUS > 1 else 0,
+    gpus=-1 if NUM_GPUS > 1 else [0],
     # gpus=[0],
     benchmark=True,
     precision=16,
@@ -331,7 +331,7 @@ trainer = pl.Trainer(
         pl.callbacks.ModelCheckpoint(save_top_k=-1),
     ],
     # weights_summary="full",
-    # overfit_batches=20 if DEBUG else 0.0,
+    overfit_batches=1 if DEBUG else 0.0,  # 0.0 by default
 )
 trainer.fit(pl_model, train_dl, valid_dl)
 trainer.save_checkpoint("end.ckpt")
