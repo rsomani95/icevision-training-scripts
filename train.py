@@ -31,7 +31,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 BATCH_SIZE = 18
 HEIGHT, WIDTH = 640, 640
 DEBUG = False
-SINGLE_GPU = True  # Run training on one or multiple GPUs
+SINGLE_GPU = False  # Run training on one or multiple GPUs
 SCHEDULE = "1x"
 LR_TYPE = "constant"
 FREEZE_BLOCKS = 1
@@ -159,6 +159,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
                     layer.eval()
 
     def configure_optimizers(self):
+        self.LRs = LEARNING_RATES
         optimizer = torch.optim.SGD(
             model_splitter(
                 self.model,
@@ -213,7 +214,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
         for k, v in outputs["log_vars"].items():
             self.log(f"train/{k}", v)
 
-        DEBUG = True
+        # DEBUG = True
         if DEBUG and self.training:
             print(f'{"*"*30} Training Step {"*"*30}')
             print(f"Finding unused parameters...")
@@ -222,7 +223,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
                 if param.grad is None:
                     print(name)
             print(f'{"*"*80}')
-        DEBUG = False
+        # DEBUG = False
 
         return outputs["loss"]
 
