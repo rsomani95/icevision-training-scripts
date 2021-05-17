@@ -108,16 +108,19 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
         self,
         model: nn.Module,
         metrics: List[Metric] = None,
-        norm_eval=True,
-        freeze_blocks=1,
+        norm_eval: bool = True,
+        freeze_blocks: int = 1,
     ):
         """
         `norm_eval`: Sets BatchNorm layers to eval mode
         `freeze_blocks`: No. of backbone blocks to be frozen. NOTE that the
-                         conv stem is ALWAYS frozen
+                         conv stem is ALWAYS frozen. `freeze_blocks=21 will
+        freeze the first two block. There are 7 blocks in mobilenetv3
         """
         super().__init__(model=model, metrics=metrics)
         self.norm_eval = norm_eval
+        assert freeze_blocks <= 7
+        self.freeze_blocks = freeze_blocks
         # self.model_ema = ModelEmaV2(self.model, decay=0.9999) #, device="cpu")
 
     def _freeze_stages(self):
@@ -128,7 +131,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
             for param in l.parameters():
                 param.requires_grad = False
 
-        for i in range(self.frozen_stages):
+        for i in range(self.freeze_blocks):
             l = m.blocks[i]
             l.eval()
             for param in l.parameters():
