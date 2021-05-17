@@ -17,8 +17,8 @@ BACKBONES.register_module(
 
 def model_splitter(
     m: "TimmBackboneWrapper",
-    LR_stem: float = 1e-6,
-    LR_blocks: Union[float, List[float]] = [1e-5, 1e-4, 1e-4, 1e-3, 1e-3, 1e-3, 1e-3],
+    LR_stem: Optional[float] = None,
+    LR_blocks: List[Optional[float]] = [None, 1e-4, 1e-4, 1e-3, 1e-3, 1e-3, 1e-3],
     LR_neck: float = 1e-2,
     LR_bbox_head: float = 1e-2,
     LR_classifier_heads: Optional[float] = None,
@@ -27,34 +27,45 @@ def model_splitter(
     Splits a mobilenetv3 w/ RetinaNet-Head (or any one stage detector from mmdet)
     into multiple param groups:
     """
-    if isinstance(LR_blocks, list):
-        assert len(LR_blocks) == 7
-    else:
-        # Unroll same LR for all 7 blocks
-        LR_blocks = [LR_blocks] * 7
+    assert isinstance(LR_blocks, list)
+    assert len(LR_blocks) == 7, f"Expected a list of 7 LRs (one per block)"
 
     # b = backbone
-    b = m.backbone.model
+    bbone = m.backbone.model
 
-    # assign individual LR per block
-    block_param_groups = [
-        # assign `block_idx` for easy indexing in LR warmup
-        dict(name=f"block_{i}", block_idx=i, lr=lr, params=params(block))
-        for i, (block, lr) in enumerate(zip(b.blocks, LR_blocks))
-    ]
+    PARAM_GROUPS = []
+    if LR_stem is not None:
+        PARAM_GROUPS.append(
+            dict(name="stem", lr=LR_stem, params=params([bbone.conv_stem, b.bn1]))
+        )
 
-    param_groups = [
-        dict(name="stem", lr=LR_stem, params=params([b.conv_stem, b.bn1])),
-        *block_param_groups,
-        dict(name="neck", lr=LR_neck, params=params(m.neck)),
-        dict(name="bbox_head", lr=LR_bbox_head, params=params(m.bbox_head)),
-    ]
+    # assign individual LR per (unfrozen) block
+    block_param_groups = []
+    for i, (block, lr) in enumerate(zip(bbone.blocks, LR_blocks)):
+        if lr is not None:
+            block_param_groups.append(
+                dict(name=f"block_{i}", block_idx=i, lr=lr, params=params(block))
+            )
+
+    # block_param_groups = [
+    #     # assign `block_idx` for easy indexing in LR warmup
+    #     dict(name=f"block_{i}", block_idx=i, lr=lr, params=params(block))
+    #     for i, (block, lr) in enumerate(zip(bbone.blocks, LR_blocks))
+    # ]
+
+    PARAM_GROUPS.extend(block_param_groups)
+    PARAM_GROUPS.extend(
+        [
+            dict(name="neck", lr=LR_neck, params=params(m.neck)),
+            dict(name="bbox_head", lr=LR_bbox_head, params=params(m.bbox_head)),
+        ]
+    )
     if LR_classifier_heads is not None:
-        param_groups.append(
+        PARAM_GROUPS.append(
             dict(
                 name="classifier_heads",
                 lr=LR_classifier_heads,
                 params=params(m.classifier_heads),
             )
         )
-    return param_groups
+    return PARAM_GROUPS
