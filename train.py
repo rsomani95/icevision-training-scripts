@@ -30,7 +30,8 @@ from torch.nn.modules.batchnorm import _BatchNorm
 
 BATCH_SIZE = 18
 HEIGHT, WIDTH = 640, 640
-DEBUG = True
+DEBUG = False
+SINGLE_GPU = True  # Run training on one or multiple GPUs
 SCHEDULE = "1x"
 LR_TYPE = "constant"
 FREEZE_BLOCKS = 1
@@ -42,6 +43,8 @@ DEFAULT_TOTAL_SAMPLES = 16  # 8 GPUs * 2 samples per GPU
 DEFAULT_LR = 0.02
 
 NUM_GPUS = 1
+if not DEBUG:
+    NUM_GPUS = 1 if SINGLE_GPU else 3
 SAMPLES_PER_GPU = BATCH_SIZE
 TOTAL_SAMPLES = SAMPLES_PER_GPU * NUM_GPUS
 LR_SCALER = TOTAL_SAMPLES / DEFAULT_TOTAL_SAMPLES
@@ -75,7 +78,7 @@ elif SCHEDULE == "2x":
     TRAIN_NUM_EPOCHS = 24
     LR_STEP_MILESTONES = [16, 22]
 if DEBUG:
-    TRAIN_NUM_EPOCHS = 2
+    TRAIN_NUM_EPOCHS = 5
 
 
 # ========================================= #
@@ -221,7 +224,8 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
         for k, v in outputs["log_vars"].items():
             self.log(f"train/{k}", v)
 
-        if DEBUG:
+        DEBUG = True
+        if DEBUG and self.training:
             print(f'{"*"*30} Training Step {"*"*30}')
             print(f"Finding unused parameters...")
 
@@ -229,6 +233,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
                 if param.grad is None:
                     print(name)
             print(f'{"*"*80}')
+        DEBUG = False
 
         return outputs["loss"]
 
@@ -315,6 +320,10 @@ valid_dl = models.mmdet.retinanet.valid_dl(
 
 # ============== DATALOADER, METRICS ================ #
 
+loggers = [pl.loggers.TensorBoardLogger(name="coco-mnv3", save_dir="lightning_logs/")]
+if not DEBUG:
+    loggers.append(pl.loggers.wandb.WandbLogger(project="coco-mnv3"))
+
 trainer = pl.Trainer(
     max_epochs=TRAIN_NUM_EPOCHS,
     gpus=-1 if NUM_GPUS > 1 else [0],
@@ -322,16 +331,13 @@ trainer = pl.Trainer(
     benchmark=True,
     precision=16,
     accelerator="ddp" if NUM_GPUS > 1 else None,
-    logger=[
-        pl.loggers.TensorBoardLogger(name="coco-mnv3", save_dir="lightning_logs/"),
-        pl.loggers.wandb.WandbLogger(project="coco-mnv3"),
-    ],
+    logger=loggers,
     callbacks=[
         pl.callbacks.LearningRateMonitor(logging_interval="step"),
         pl.callbacks.ModelCheckpoint(save_top_k=-1),
     ],
     # weights_summary="full",
-    overfit_batches=1 if DEBUG else 0.0,  # 0.0 by default
+    overfit_batches=1 if DEBUG else 0.0,  # 0.0 => train on full dataset
 )
 trainer.fit(pl_model, train_dl, valid_dl)
 trainer.save_checkpoint("end.ckpt")
@@ -342,17 +348,18 @@ trainer.save_checkpoint("end.ckpt")
 # ================= CONFIG LOGGING ================== #
 
 
-wandb.config.update(
-    dict(
-        model="mobilenetv3-aa",
-        num_epochs=TRAIN_NUM_EPOCHS,
-        lr_policy=LR_TYPE,
-        schedule=SCHEDULE,
-        batch_size=BATCH_SIZE,
-        image_size=f"{HEIGHT}x{WIDTH}",
-        optimizer="SGD",
-        train_tfms=[extract_tfm_string(t) for t in train_tfms.tfms_list],
+if not DEBUG:
+    wandb.config.update(
+        dict(
+            model="mobilenetv3-aa",
+            num_epochs=TRAIN_NUM_EPOCHS,
+            lr_policy=LR_TYPE,
+            schedule=SCHEDULE,
+            batch_size=BATCH_SIZE,
+            image_size=f"{HEIGHT}x{WIDTH}",
+            optimizer="SGD",
+            train_tfms=[extract_tfm_string(t) for t in train_tfms.tfms_list],
+        )
     )
-)
 
 # =================================================== #
