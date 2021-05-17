@@ -149,22 +149,31 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
                     layer.eval()
 
     def configure_optimizers(self):
-        self.LRs = LEARNING_RATES
-        assert isinstance(self.LRs["blocks"], list)  # just do it.
+        if LR_TYPE == "differential":
+            self.LRs = LEARNING_RATES
+            assert isinstance(self.LRs["blocks"], list)  # just do it.
 
-        optimizer = torch.optim.SGD(
-            model_splitter(
-                self.model,
-                LR_stem=self.LRs["stem"],
-                LR_blocks=self.LRs["blocks"],
-                LR_neck=self.LRs["neck"],
-                LR_bbox_head=self.LRs["bbox_head"],
-                LR_classifier_heads=self.LRs["classifier_heads"],
-            ),
-            lr=0.01,
-            momentum=0.9,
-            weight_decay=0.0001,
-        )
+            optimizer = torch.optim.SGD(
+                model_splitter(
+                    self.model,
+                    LR_stem=self.LRs["stem"],
+                    LR_blocks=self.LRs["blocks"],
+                    LR_neck=self.LRs["neck"],
+                    LR_bbox_head=self.LRs["bbox_head"],
+                    LR_classifier_heads=self.LRs["classifier_heads"],
+                ),  # returns a list of parameter groups
+                lr=0.01,
+                momentum=0.9,
+                weight_decay=0.0001,
+            )
+        else:
+            optimizer = torch.optim.SGD(
+                self.model.parameters(),
+                lr=LR,
+                # lr=0.02,
+                momentum=0.9,
+                weight_decay=0.0001,
+            )
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer, milestones=LR_STEP_MILESTONES
         )
@@ -180,15 +189,19 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
         if self.trainer.global_step < 500:
             lr_scale = min(1.0, float(self.trainer.global_step + 1) / 500.0)
 
-            # ensure we respect individual param groups' LR by scaling
-            # each group's lr with the initial lr
-            # TODO: This can be easily refactored into an `lr_scheduler`.
-            # You don't need to track each group manually that way
-            for pg in optimizer.param_groups:
-                if "block_idx" in pg.keys():
-                    pg["lr"] = lr_scale * self.LRs["blocks"][pg["block_idx"]]
-                else:
-                    pg["lr"] = lr_scale * self.LRs[pg["name"]]
+            if LR_TYPE == "differential":
+                # ensure we respect individual param groups' LR by scaling
+                # each group's lr with the initial lr
+                # TODO: This can be easily refactored into an `lr_scheduler`.
+                # You don't need to track each group manually that way
+                for pg in optimizer.param_groups:
+                    if "block_idx" in pg.keys():
+                        pg["lr"] = lr_scale * self.LRs["blocks"][pg["block_idx"]]
+                    else:
+                        pg["lr"] = lr_scale * self.LRs[pg["name"]]
+            else:
+                for pg in optimizer.param_groups:
+                    pg["lr"] = lr_scale * self.learning_rate
 
         # update params, EMA
         optimizer.step(closure=optimizer_closure)
