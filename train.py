@@ -33,6 +33,7 @@ HEIGHT, WIDTH = 640, 640
 DEBUG = True
 SCHEDULE = "1x"
 LR_TYPE = "constant"
+FREEZE_BLOCKS = 1
 
 assert LR_TYPE in ["constant", "differential"]
 assert SCHEDULE in ["1x", "2x"]
@@ -45,11 +46,14 @@ SAMPLES_PER_GPU = BATCH_SIZE
 TOTAL_SAMPLES = SAMPLES_PER_GPU * NUM_GPUS
 LR_SCALER = TOTAL_SAMPLES / DEFAULT_TOTAL_SAMPLES
 LR = LR_SCALER * DEFAULT_LR  # == 0.0675 @18, 0.06 @16, 0.12 @ 32, and so on...
+print(f"{'*' * 20} LEARNING RATE: {LR} {'*' * 20}")
+
 
 if LR_TYPE == "constant":
     LEARNING_RATES = dict(
-        stem=LR,
-        blocks=[LR] * 7,
+        stem=None,
+        # blocks = [None, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2]
+        blocks=([None] * FREEZE_BLOCKS) + ([1e-2] * (7 - FREEZE_BLOCKS)),
         neck=LR,
         bbox_head=LR,
         classifier_heads=None,
@@ -70,6 +74,9 @@ if SCHEDULE == "1x":
 elif SCHEDULE == "2x":
     TRAIN_NUM_EPOCHS = 24
     LR_STEP_MILESTONES = [16, 22]
+if DEBUG:
+    TRAIN_NUM_EPOCHS = 2
+
 
 # ========================================= #
 
@@ -109,7 +116,7 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
         model: nn.Module,
         metrics: List[Metric] = None,
         norm_eval: bool = True,
-        freeze_blocks: int = 1,
+        freeze_blocks: int = FREEZE_BLOCKS,
     ):
         """
         `norm_eval`: Sets BatchNorm layers to eval mode
