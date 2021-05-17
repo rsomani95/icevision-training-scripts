@@ -122,8 +122,8 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
 
     def _freeze_stages(self):
         # ACRONYMS: m => model; l => layer
-        m = self.model
-        for l in [m.conv1, m.bn1, m.act1]:
+        m = self.model.backbone.model
+        for l in [m.conv_stem, m.bn1, m.act1]:
             l.eval()
             for param in l.parameters():
                 param.requires_grad = False
@@ -140,9 +140,9 @@ class MobileNetV3Adapter(models.mmdet.retinanet.lightning.ModelAdapter):
         super(MobileNetV3Adapter, self).train(mode)
         self._freeze_stages()
         if mode and self.norm_eval:
-            for layer in self.model.modules():
+            for layer in self.model.backbone.model.modules():
                 # trick: eval have effect on BatchNorm only
-                if isinstance(m, _BatchNorm):
+                if isinstance(layer, _BatchNorm):
                     layer.eval()
 
     def configure_optimizers(self):
