@@ -1,4 +1,6 @@
+import torch
 import pytorch_lightning as pl
+import torch.nn as nn
 
 # Python imports
 from pprint import pprint
